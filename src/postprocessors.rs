@@ -1,24 +1,27 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    Chunk, Generator,
+    Chunks, Generator,
+    analysis::Passable,
 };
 
-pub struct AllConnected<'a> {
-    inner: Box<dyn Generator<bool> + 'a>,
+pub struct AllConnected<'a, TileType> where TileType: Passable {
+    inner: Box<dyn Generator<TileType> + 'a>,
 }
 
-impl<'a> AllConnected<'a> {
-    pub fn new<G: Generator<bool> + 'a>(inner: G) -> Self {
+impl<'a, TileType: Passable> AllConnected<'a, TileType> {
+    pub fn new<G: Generator<TileType> + 'a>(inner: G) -> Self {
         Self {
             inner: Box::new(inner),
         }
     }
 }
 
-impl<'a> Generator<bool> for AllConnected<'a> {
-    fn new_chunk(&mut self, location: &(i32, i32), map: &HashMap<(i32, i32), Chunk<bool>>, lower_layers: &[Vec<Vec<bool>>], chunk: &mut [Vec<bool>]) {
-        self.inner.new_chunk(location, map, lower_layers, chunk);
+impl<'a, TileType: Passable + Clone> Generator<TileType> for AllConnected<'a, TileType> {
+    fn new_chunk(&mut self, location: &(i32, i32), chunks: &mut Chunks<TileType>) {
+        self.inner.new_chunk(location, chunks);
+        //FIXME: I shouldn't need to clone but I'm having trouble with the borrow checker
+        let mut chunk = chunks.get_chunk_mut(location).unwrap().clone();
         let mut changed = true;
         let mut tile_to_region = HashMap::new();
         let mut regions = HashMap::new();
@@ -31,7 +34,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
                 let x = x as i32;
                 for (y, t) in col.iter().enumerate() {
                     let y = y as i32;
-                    if *t {
+                    if t.is_passable() {
                         let region = *tile_to_region.entry((x, y)).or_insert_with(|| {
                             let id = region_id;
                             region_id += 1;
@@ -42,7 +45,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
                             let xx = x + dx;
                             let yy = y + dy;
                             if !(xx == x && yy == y) && xx >= 0 && xx < width && yy >= 0 && yy < height {
-                                if chunk[xx as usize][yy as usize] {
+                                if chunk[xx as usize][yy as usize].is_passable() {
                                     if let Some(other_region) = tile_to_region.get(&(xx, yy)) {
                                         if region != *other_region {
                                             let other_tiles = regions.remove(other_region).unwrap();
@@ -70,8 +73,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
         for (dx, dy) in &[(-1, 0), (0, -1), (1, 0), (0, 1)] {
             let xx = location.0 + dx;
             let yy = location.1 + dy;
-            if let Some(other) = map.get(&(xx, yy)) {
-                let other = &other.layers[lower_layers.len()];
+            if let Some(other) = chunks.get_chunk(&(xx, yy)) {
                 let width = other.len();
                 let height = other[0].len();
                 let edge:Vec<(i32, i32)> = match (dx, dy) {
@@ -82,7 +84,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
                     _ => panic!(),
                 };
                 for (x,y) in edge {
-                    if other[x as usize][y as usize] {
+                    if other[x as usize][y as usize].is_passable() {
                         let x = x + width as i32*dx;
                         let y = y + height as i32*dy;
                         tile_to_region.insert((x,y), *largest_region);
@@ -102,7 +104,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
                     let xx = x + dx;
                     let yy = y + dy;
                     if xx >= 0 && xx < width && yy >= 0 && yy < height {
-                        if !chunk[xx as usize][yy as usize] {
+                        if !chunk[xx as usize][yy as usize].is_passable() {
                             to_expand.insert((xx, yy));
                         }
                     }
@@ -111,7 +113,7 @@ impl<'a> Generator<bool> for AllConnected<'a> {
 
             // Repeatedly expand the smallest region until all regions are connected
             for (x,y) in to_expand {
-                chunk[x as usize][y as usize] = true;
+                chunk[x as usize][y as usize].set_passable(true);
                 regions.get_mut(&region).unwrap().push((x, y));
                 tile_to_region.insert((x, y), region);
                 for (dx, dy) in &[(-1, 0), (0, -1), (1, 0), (0, 1)] {
@@ -129,5 +131,6 @@ impl<'a> Generator<bool> for AllConnected<'a> {
                 }
             }
         }
+        *chunks.get_chunk_mut(location).unwrap() = chunk;
     }
 }
