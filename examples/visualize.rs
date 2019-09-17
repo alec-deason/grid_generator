@@ -11,7 +11,7 @@ use grid_builder::{
 
 #[derive(Clone)]
 struct Tile {
-    edges: HashSet<(i32, i32)>,
+    edges: HashSet<Point>,
     passable: bool,
 }
 
@@ -30,8 +30,8 @@ impl Passable for Tile {
 }
 
 impl Connected for Tile {
-    fn get_edges(&self) -> &HashSet<(i32, i32)> { &self.edges }
-    fn get_edges_mut(&mut self) -> &mut HashSet<(i32, i32)> { &mut self.edges }
+    fn get_edges(&self) -> &HashSet<Point> { &self.edges }
+    fn get_edges_mut(&mut self) -> &mut HashSet<Point> { &mut self.edges }
 }
 
 fn main() {
