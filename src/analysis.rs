@@ -22,9 +22,9 @@ impl<TileType: Connected + Passable + Send> Generator<TileType> for Connectivity
         let width = width as i32;
         let height = height as i32;
         for x in 0..width {
-            let x = x + location.0 * width;
+            let x = x + location.0;
             for y in 0..height {
-                let y = y + location.1 * height;
+                let y = y + location.1;
                 let passable = chunks.get_tile(&(x, y)).unwrap().is_passable();
                 if passable {
                     let mut edges_to_add = HashSet::new();

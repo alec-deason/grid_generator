@@ -71,8 +71,8 @@ impl<'a, TileType: Passable + Clone> Generator<TileType> for AllConnected<'a, Ti
         //connect with them
         let (largest_region, largest_region_tiles) = regions.iter_mut().max_by_key(|(_, tiles)| tiles.len()).unwrap();
         for (dx, dy) in &[(-1, 0), (0, -1), (1, 0), (0, 1)] {
-            let xx = location.0 + dx;
-            let yy = location.1 + dy;
+            let xx = location.0 + dx * width;
+            let yy = location.1 + dy * height;
             if let Some(other) = chunks.get_chunk(&(xx, yy)) {
                 let width = other.len();
                 let height = other[0].len();

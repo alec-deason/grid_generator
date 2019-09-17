@@ -41,15 +41,6 @@ fn main() {
         Box::new(Connectivity),
     ];
     let mut map: Map<Tile> = Map::new(b, (30, 30));
-    map.maybe_generate_chunk(&(0,0));
-    map.maybe_generate_chunk(&(0,1));
-    map.maybe_generate_chunk(&(0,2));
-    map.maybe_generate_chunk(&(1,0));
-    map.maybe_generate_chunk(&(1,1));
-    map.maybe_generate_chunk(&(1,2));
-    map.maybe_generate_chunk(&(2,0));
-    map.maybe_generate_chunk(&(2,1));
-    map.maybe_generate_chunk(&(2,2));
     let mut imgbuf = image::ImageBuffer::new(90, 90);
     for (x,y,p) in imgbuf.enumerate_pixels_mut() {
         if map.get_or_generate_tile(&(x as i32, y as i32)).is_passable() {
