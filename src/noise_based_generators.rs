@@ -33,7 +33,7 @@ impl<TextureType: Passable> Generator<TextureType> for FbmGenerator {
         for x in 0..width {
             for y in 0..height {
                 for z in 0..depth {
-                    let n = self.noise.get([location.0 as f64 + x as f64, location.1 as f64 + y as f64]);
+                    let n = self.noise.get([location.0 as f64 + x as f64, location.1 as f64 + y as f64, location.1 as f64 + z as f64]);
                     chunk[x][y][z].set_passable(n > 0.1);
                 }
             }
