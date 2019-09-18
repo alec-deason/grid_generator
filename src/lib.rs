@@ -165,7 +165,7 @@ impl<TileType: Default> Map<TileType> {
             }).collect(),
         });
         for generator in &mut self.generators {
-            generator.new_chunk(&(chunk_loc.0 * width, chunk_loc.1 * height, chunk_loc.2 + depth), chunks);
+            generator.new_chunk(&(chunk_loc.0 * width, chunk_loc.1 * height, chunk_loc.2 * depth), chunks);
         }
         true
     }
