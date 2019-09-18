@@ -28,7 +28,6 @@ impl FbmGenerator {
 impl<TextureType: Passable> Generator<TextureType> for FbmGenerator {
     fn new_chunk(&mut self, location: &Point, chunks: &mut Chunks<TextureType>) {
         let (width, height, depth) = chunks.chunk_size;
-        eprintln!("{:?} {:?}", location, chunks.chunk_size);
         let chunk = &mut chunks.get_chunk_mut(location).unwrap();
         for x in 0..width {
             for y in 0..height {
