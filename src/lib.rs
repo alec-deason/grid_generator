@@ -1,4 +1,11 @@
+use std::sync::{
+    Mutex, Convar, Arc, Weak,
+    atomic::{AtomicUsize, Ordering},
+};
+use std::cell::{UnsafeCell, RefCell};
 use std::collections::{HashMap, HashSet};
+
+use parking_lot_core::{park, unpark, DEFAULT_PARK_TOKEN};
 
 #[cfg(feature = "noise_based_generators")]
 pub mod noise_based_generators;
@@ -100,6 +107,222 @@ impl<TileType> Chunks<TileType> {
             }).flatten()
         }).flatten()
     }
+}
+
+type LockMap = RefCell<HashMap<usize, ([[i32; 3]; 2], Vec<usize>)>>;
+
+pub struct RegionLock<Tile> {
+    data: UnsafeCell<HashMap<[i32; 3], Tile>>,
+
+    next_key: AtomicUsize,
+    read: LockMap,
+    write: LockMap,
+}
+
+impl<Tile: Default> RegionLock<Tile> {
+    fn get_tile(&self, p: &[i32; 3]) -> Option<&Tile> {
+        let container = unsafe { &*self.data.get() };
+        container.get(p)
+    }
+
+    fn get_tile_mut(&self, p: &[i32; 3]) -> &mut Tile {
+        let container = unsafe { &mut *self.data.get() };
+        container.entry(*p).or_insert_with(Tile::default)
+    }
+
+    pub fn read_region(&self, region: [[i32; 3]; 2]) -> ReadGuard<Tile> {
+        let key = self.next_key.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            park(
+                key,
+                || {
+                    self.maybe_lock_region(key, region, false)
+                },
+                || {},
+                |_,_| {},
+                DEFAULT_PARK_TOKEN,
+                None,
+            );
+            ReadGuard {
+                owner: self,
+                key: key,
+                region,
+            }
+        }
+    }
+
+    /*
+    pub fn try_write_region(&mut self, region: [[i32; 3]; 2]) -> Option<WriteGuard<Tile>> {
+
+        let mut locks = self.locks.lock().unwrap();
+        if !locks.write.values().any(|other| overlap(&region, other)) &&
+           !locks.read.values().any(|other| overlap(&region, other)) {
+            locks.next_lock_id += 1;
+            let id = locks.next_lock_id;
+            locks.write.insert(id, region);
+
+            Some(WriteGuard {
+                owner: self,
+                id,
+                region,
+            })
+        } else {
+            None
+        }
+    }
+    */
+
+    fn has_conflict(&self, key: usize, region[[i32; 3]; 2], is_write: bool, insert: bool) -> bool {
+        let write = self.write.borrow_mut();
+        let mut conflict = false;
+        for (other_region, queue) in write.values_mut() {
+            if overlap(&region, other_region) {
+                if insert {
+                    queue.push(key);
+                }
+                conflict = true;
+            }
+        }
+        let read = self.write.borrow_mut();
+        if is_write {
+            for (other_region, queue) in read.values_mut() {
+                if overlap(&region, other_region) {
+                    if insert {
+                        queue.push(key);
+                    }
+                    conflict = true;
+                }
+            }
+            write.insert(key, (region, vec![]));
+        } else {
+            read.insert(key, (region, vec![]));
+        }
+        conflict
+    }
+
+    fn maybe_lock_region(&self, key: usize, region: [[i32; 3]; 2], is_write: bool) -> bool {
+        let conflict = self.has_conflict(key, region, is_write);
+        if is_write {
+            let write = self.write.borrow_mut();
+            write.insert(key, (region, vec![]));
+        } else {
+            let read = self.write.borrow_mut();
+            read.insert(key, (region, vec![]));
+        }
+        conflict
+    }
+
+    fn unlock_region(&self, key: usize, is_write: bool) {
+        unpark(
+            key,
+            |_| {
+                let (_, others) = if is_write {
+                    self.write.borrow_mut().remove(&key)
+                } else {
+                    self.read.borrow_mut().remove(&key)
+                }.unwrap();
+                for other in others {
+                    let region;
+                    let is_write;
+                    if self.write.borrow().contains_key(&other) {
+                        region = self.write.borrow().get(&other).unwrap().0;
+                        is_write = true;
+                    } else {
+                        region = self.read.borrow().get(&other).unwrap().0;
+                        is_write = false;
+                    }
+                }
+            },
+        );
+    }
+}
+
+trait Guard<Tile> {
+    fn owner(&self) -> &'_ RegionLock<Tile>;
+    fn region(&self) -> &[[i32; 3]; 2];
+}
+
+fn within(p: &[i32; 3], region: &[[i32; 3]; 2]) -> bool {
+    (p[0] >= region[0][0] && p[0] < region[1][0]) ||
+    (p[1] >= region[0][1] && p[1] < region[1][1]) ||
+    (p[2] >= region[0][2] && p[2] < region[1][2])
+}
+
+trait RegionReader<Tile>: Guard<Tile>
+    where Tile: Default {
+    fn get_tile(&self, p: &[i32; 3]) -> Result<Option<&Tile>, ()> {
+        if within(p, self.region()) {
+            Ok(self.owner().get_tile(p))
+        } else {
+            Err(())
+        }
+    }
+}
+
+trait RegionWriter<Tile>: Guard<Tile> 
+    where Tile: Default {
+    fn get_tile_mut(&self, p: &[i32; 3]) -> Result<&mut Tile, ()> {
+        if within(p, self.region()) {
+            Ok(self.owner().get_tile_mut(p))
+        } else {
+            Err(())
+        }
+    }
+}
+
+pub struct ReadGuard<'a, Tile> {
+    owner: &'a RegionLock<Tile>,
+    key: usize,
+    region: [[i32; 3]; 2],
+}
+impl<'a, Tile: Default> RegionReader<Tile> for ReadGuard<'a, Tile> {}
+
+impl<'a, Tile> Guard<Tile> for ReadGuard<'a, Tile> {
+    fn owner(&self) -> &RegionLock<Tile> {
+        self.owner
+    }
+    fn region(&self) -> &[[i32; 3]; 2] {
+        &self.region
+    }
+}
+
+impl<'a, Tile> Drop for ReadGuard<'a, Tile> {
+    fn drop(&mut self) {
+        self.owner.locks.lock().unwrap().read.remove(&self.id);
+    }
+}
+
+impl<'a, Tile: Default> RegionReader<Tile> for WriteGuard<'a, Tile> {}
+impl<'a, Tile: Default> RegionWriter<Tile> for WriteGuard<'a, Tile> {}
+
+pub struct WriteGuard<'a, Tile> {
+    owner: &'a RegionLock<Tile>,
+    id: usize,
+    region: [[i32; 3]; 2],
+}
+
+impl<'a, Tile> Drop for WriteGuard<'a, Tile> {
+    fn drop(&mut self) {
+        self.owner.locks.lock().unwrap().write.remove(&self.id);
+    }
+}
+
+impl<'a, Tile> Guard<Tile> for WriteGuard<'a, Tile> {
+    fn owner(&self) -> &RegionLock<Tile> {
+        self.owner
+    }
+    fn region(&self) -> &[[i32; 3]; 2] {
+        &self.region
+    }
+}
+
+fn overlap(a: &[[i32; 3]; 2], b: &[[i32; 3]; 2]) -> bool {
+    (a[0][0] >= b[0][0] && a[0][0] < b[1][0]) ||
+    (a[1][0] >= b[0][0] && a[1][0] < b[1][0]) ||
+    (a[0][1] >= b[0][1] && a[0][1] < b[1][1]) ||
+    (a[1][1] >= b[0][1] && a[1][1] < b[1][1]) ||
+    (a[0][2] >= b[0][2] && a[0][2] < b[1][2]) ||
+    (a[1][2] >= b[0][2] && a[1][2] < b[1][2])
 }
 
 pub struct Map<TileType> {
