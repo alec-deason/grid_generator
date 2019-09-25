@@ -4,7 +4,7 @@ use rand::{
 };
 
 use super::{
-    Chunks, Generator, Point,
+    Generator, WriteGuard,
     analysis::Passable,
 };
 
@@ -25,17 +25,11 @@ impl FbmGenerator {
     }
 }
 
-impl<TextureType: Passable> Generator<TextureType> for FbmGenerator {
-    fn new_chunk(&mut self, location: &Point, chunks: &mut Chunks<TextureType>) {
-        let (width, height, depth) = chunks.chunk_size;
-        let chunk = &mut chunks.get_chunk_mut(location).unwrap();
-        for x in 0..width {
-            for y in 0..height {
-                for z in 0..depth {
-                    let n = self.noise.get([location.0 as f64 + x as f64, location.1 as f64 + y as f64, location.1 as f64 + z as f64]);
-                    chunk[x][y][z].set_passable(n > 0.1);
-                }
-            }
+impl<Tile: Passable+Default> Generator<[i32; 2], Tile> for FbmGenerator {
+    fn new_chunk<'a>(&self, chunk: &'a mut WriteGuard<'a, [i32; 2], Tile>, _: &'a mut WriteGuard<'a, [i32; 2], Tile>) {
+        for (p, tile) in chunk.enumerate_mut() {
+            let n = self.noise.get([p[0] as f64, p[1] as f64]);
+            tile.set_passable(n > 0.1);
         }
     }
 }
