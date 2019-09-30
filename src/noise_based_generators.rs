@@ -4,8 +4,8 @@ use rand::{
 };
 
 use super::{
-    Generator, WriteGuard,
-    analysis::Passable,
+    generator::Generator, WriteGuard,
+    point::Point, analysis::Passable,
 };
 
 #[derive(Debug)]
@@ -25,9 +25,10 @@ impl FbmGenerator {
     }
 }
 
-impl<Tile: Passable+Default> Generator<[i32; 2], Tile> for FbmGenerator {
-    fn new_chunk<'a>(&self, chunk: &'a mut WriteGuard<'a, [i32; 2], Tile>, _: &'a mut WriteGuard<'a, [i32; 2], Tile>) {
-        for (p, tile) in chunk.enumerate_mut() {
+impl<T: Passable> Generator<[i32; 2], T> for FbmGenerator {
+    fn generate(&mut self, chunk: &mut WriteGuard<'_, [i32; 2], T>, core_region: &[[i32; 2]; 2], _umbra: &[[i32; 2]; 2]) {
+        for p in <[i32; 2] as Point>::points_in_region(core_region) {
+            let mut tile = chunk.get_mut(&p).unwrap();
             let n = self.noise.get([p[0] as f64, p[1] as f64]);
             tile.set_passable(n > 0.1);
         }

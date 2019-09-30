@@ -1,14 +1,12 @@
 use std::collections::HashMap;
-use std::hash::Hash;
-use std::iter::{from_fn,};
 
-use crate::Point;
+use crate::point::Point;
 
 pub struct SparseMap<P, T> {
     index: HashMap<P, usize>,
     chunks: Vec<Vec<T>>,
 
-    chunk_size: u32,
+    pub chunk_size: u32,
 }
 
 impl<P: Point, T: Default> SparseMap<P, T> {
@@ -122,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn wite_points() {
+    fn write_points() {
         let mut map:SparseMap<[i32; 2], Tile> = SparseMap::new(10);
         let mut region = map.region_mut(&[[0, 0], [100, 100]]);
         region.set(&[50, 50], Tile { a: 42, b: 43 }).unwrap();
@@ -131,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn wite_points_then_read() {
+    fn write_points_then_read() {
         let mut map:SparseMap<[i32; 2], Tile> = SparseMap::new(10);
         let mut region = map.region_mut(&[[0, 0], [100, 100]]);
         region.set(&[50, 50], Tile { a: 42, b: 43 }).unwrap();

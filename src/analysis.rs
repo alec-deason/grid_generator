@@ -1,7 +1,7 @@
 use std::collections::{HashSet, HashMap,};
 
 use super::{
-    Generator, WriteGuard, Point,
+    generator::Generator, WriteGuard, point::Point,
 };
 
 pub trait Passable {
@@ -16,34 +16,23 @@ pub trait Connected<Point> {
 
 pub struct Connectivity;
 
-impl<P: 'static+Point, Tile: Connected<P> + Passable + Default> Generator<P, Tile> for Connectivity {
-    fn new_chunk<'a>(&self, chunk: &'a mut WriteGuard<'a, P, Tile>, umbra: &'a mut WriteGuard<'a, P, Tile>) {
+impl<P: Point, T: Connected<P> + Passable> Generator<P, T> for Connectivity {
+    fn generate(&mut self, chunk: &mut WriteGuard<'_, P, T>, core_region: &[P; 2], _umbra: &[P; 2]) {
         let mut to_add = HashMap::new();
-        let mut umbra_to_add = HashMap::new();
-        for (p, tile) in chunk.enumerate() {
+        for p in P::points_in_region(core_region) {
+            let tile = chunk.get(&p).unwrap();
             if tile.is_passable() {
                 for pp in p.neighboors() {
-                    if let Some(other) = chunk.get(&pp) {
-                        if other.is_passable() {
-                            to_add.entry(p).or_insert(HashSet::new()).insert(pp);
-                            to_add.entry(pp).or_insert(HashSet::new()).insert(p);
-                        }
-                    } else {
-                        if let Some(other) = umbra.get(&pp) {
-                            if other.is_passable() {
-                                to_add.entry(p).or_insert(HashSet::new()).insert(pp);
-                                umbra_to_add.entry(pp).or_insert(HashSet::new()).insert(p);
-                            }
-                        }
+                    let other = chunk.get(&pp).unwrap();
+                    if other.is_passable() {
+                        to_add.entry(p.clone()).or_insert(HashSet::new()).insert(pp.clone());
+                        to_add.entry(pp).or_insert(HashSet::new()).insert(p.clone());
                     }
                 }
             }
         }
         for (p, edges) in to_add {
             chunk.get_mut(&p).unwrap().get_edges_mut().extend(edges);
-        }
-        for (p, edges) in umbra_to_add {
-            umbra.get_mut(&p).unwrap().get_edges_mut().extend(edges);
         }
     }
 }

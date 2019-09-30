@@ -3,43 +3,47 @@ use std::sync::Mutex;
 
 use parking_lot_core::{park, unpark_one, DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN};
 
-use crate::Point;
+use crate::point::Point;
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone)]
-pub struct LockKey(usize);
+pub struct LockKey(usize, bool);
 
-pub struct Lock<Point> {
-    lock: Mutex<()>,
+struct Inner<Point> {
     read: HashMap<LockKey, (Vec<[Point; 2]>, Vec<LockKey>)>,
     write: HashMap<LockKey, (Vec<[Point; 2]>, Vec<LockKey>)>,
-    pending: HashSet<LockKey>,
     lock_id: usize,
+    pending: HashSet<LockKey>,
+}
+
+pub struct Lock<Point> {
+    lock: Mutex<Inner<Point>>,
 }
 
 impl<P: Point> Lock<P> {
     pub fn new() -> Self {
         Self {
-            lock: Mutex::new(()),
-            read: HashMap::new(),
-            write: HashMap::new(),
-            pending: HashSet::new(),
-            lock_id: 0,
+            lock: Mutex::new(Inner {
+                read: HashMap::new(),
+                write: HashMap::new(),
+                lock_id: 0,
+                pending: HashSet::new(),
+            }),
         }
     }
 
-    pub fn lock_region(&mut self, regions: &[[P; 2]], is_write: bool, blocking: bool) -> Option<LockKey> {
+    pub fn lock_region(&self, regions: &[[P; 2]], is_write: bool, blocking: bool) -> Option<Guard<P>> {
         let mut conflict = true;
-        let mut key = LockKey(0);
+        let mut key = LockKey(0, is_write);
         while conflict {
             conflict = false;
             {
-                let _lock = self.lock.lock().unwrap();
-                if self.read.is_empty() && self.write.is_empty() && self.pending.is_empty() {
-                    self.lock_id = 0;
+                let mut inner = self.lock.lock().unwrap();
+                if inner.read.is_empty() && inner.write.is_empty() && inner.pending.is_empty() {
+                    inner.lock_id = 0;
                 }
-                key = LockKey(self.lock_id);
-                self.lock_id += 1;
-                'outer: for (_, (lock_regions, queue)) in &mut self.write {
+                key = LockKey(inner.lock_id, is_write);
+                inner.lock_id += 1;
+                'outer: for (_, (lock_regions, queue)) in &mut inner.write {
                     for region in regions {
                         for lock_region in lock_regions.iter() {
                             if Point::overlap_rect(region, lock_region) {
@@ -51,7 +55,7 @@ impl<P: Point> Lock<P> {
                     }
                 }
                 if is_write {
-                    'outer2: for (_, (lock_regions, queue)) in &mut self.read {
+                    'outer2: for (_, (lock_regions, queue)) in &mut inner.read {
                         for region in regions {
                             for lock_region in lock_regions.iter() {
                                 if Point::overlap_rect(region, lock_region) {
@@ -65,13 +69,13 @@ impl<P: Point> Lock<P> {
                 }
                 if !conflict {
                     if is_write {
-                        self.write.insert(key, (regions.to_vec(), vec![]));
+                        inner.write.insert(key, (regions.to_vec(), vec![]));
                     } else {
-                        self.read.insert(key, (regions.to_vec(), vec![]));
+                        inner.read.insert(key, (regions.to_vec(), vec![]));
                     }
                 } else {
                     if blocking {
-                        self.pending.insert(key);
+                        inner.pending.insert(key);
                         unsafe {
                             park(
                                 key.0,
@@ -89,32 +93,35 @@ impl<P: Point> Lock<P> {
             }
         }
 
-        Some(key)
+        Some(Guard {
+            owner: self,
+            key: key
+        })
     }
 
-    pub fn read_region(&mut self, regions: &[[P; 2]]) -> LockKey {
+    pub fn read_region(&self, regions: &[[P; 2]]) -> Guard<P> {
         self.lock_region(regions, false, true).unwrap()
     }
 
-    pub fn try_read_region(&mut self, regions: &[[P; 2]]) -> Option<LockKey> {
+    pub fn try_read_region(&self, regions: &[[P; 2]]) -> Option<Guard<P>> {
         self.lock_region(regions, false, false)
     }
 
-    pub fn write_region(&mut self, regions: &[[P; 2]]) -> LockKey {
+    pub fn write_region(&self, regions: &[[P; 2]]) -> Guard<P> {
         self.lock_region(regions, true, true).unwrap()
     }
 
-    pub fn try_write_region(&mut self, regions: &[[P; 2]]) -> Option<LockKey> {
+    pub fn try_write_region(&self, regions: &[[P; 2]]) -> Option<Guard<P>> {
         self.lock_region(regions, true, false)
     }
 
-    pub fn unlock_region(&mut self, lock_id: LockKey, is_write: bool) {
-        let _lock = self.lock.lock().unwrap();
+    fn unlock_region(&self, key: &LockKey) {
+        let mut inner = self.lock.lock().unwrap();
         let queue;
-        if is_write {
-            queue = self.write.remove(&lock_id).unwrap().1;
+        if key.1 {
+            queue = inner.write.remove(key).unwrap().1;
         } else {
-            queue = self.read.remove(&lock_id).unwrap().1;
+            queue = inner.read.remove(key).unwrap().1;
         }
         for other_lock in queue {
             unsafe {
@@ -126,6 +133,18 @@ impl<P: Point> Lock<P> {
         }
     }
 }
+
+pub struct Guard<'a, P> where P: Point{
+    owner: &'a Lock<P>,
+    key: LockKey,
+}
+
+impl<'a, P: Point> Drop for Guard<'a, P> {
+    fn drop(&mut self) {
+        self.owner.unlock_region(&self.key);
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -147,5 +166,25 @@ mod tests {
         assert!(lock.try_read_region(&[[[200, 200], [250, 250]]]).is_some());
         assert!(lock.try_read_region(&[[[20, 20], [25, 25]]]).is_none());
         assert!(lock.try_write_region(&[[[20, 20], [25, 25]]]).is_none());
+    }
+
+    #[test]
+    fn unlock_read() {
+        let mut lock = Lock::new();
+        {
+            let read_key = lock.read_region(&[[[0, 0], [100, 100]]]);
+            assert!(lock.try_write_region(&[[[20, 20], [25, 25]]]).is_none());
+        }
+        assert!(lock.try_write_region(&[[[20, 20], [25, 25]]]).is_some());
+    }
+
+    #[test]
+    fn unlock_write() {
+        let mut lock = Lock::new();
+        {
+            let write_key = lock.write_region(&[[[0, 0], [100, 100]]]);
+            assert!(lock.try_read_region(&[[[20, 20], [25, 25]]]).is_none());
+        }
+        assert!(lock.try_read_region(&[[[20, 20], [25, 25]]]).is_some());
     }
 }
